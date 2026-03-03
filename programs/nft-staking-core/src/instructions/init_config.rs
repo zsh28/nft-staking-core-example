@@ -1,8 +1,8 @@
+use crate::errors::StakingError;
+use crate::state::Config;
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{Mint, TokenInterface};
 use mpl_core::accounts::BaseCollectionV1;
-use crate::state::Config;
-use crate::errors::StakingError;
 
 #[derive(Accounts)]
 pub struct InitConfig<'info> {
@@ -37,16 +37,25 @@ pub struct InitConfig<'info> {
     pub token_program: Interface<'info, TokenInterface>,
 }
 impl InitConfig<'_> {
-    pub fn init_config(&mut self, points_per_stake: u32, freeze_period: u8, bumps: &InitConfigBumps) -> Result<()> {
+    pub fn init_config(
+        &mut self,
+        points_per_stake: u32,
+        freeze_period: u8,
+        bumps: &InitConfigBumps,
+    ) -> Result<()> {
         // Validate collection account
         let base_collection = BaseCollectionV1::try_from(&self.collection.to_account_info())?;
-        require!(base_collection.update_authority == self.update_authority.key(), StakingError::InvalidAuthority);
+        require!(
+            base_collection.update_authority == self.update_authority.key(),
+            StakingError::InvalidAuthority
+        );
 
         self.config.set_inner(Config {
-            points_per_stake, 
-            freeze_period, 
-            rewards_bump: bumps.rewards_mint, 
-            config_bump: bumps.config });
+            points_per_stake,
+            freeze_period,
+            rewards_bump: bumps.rewards_mint,
+            config_bump: bumps.config,
+        });
         Ok(())
     }
 }

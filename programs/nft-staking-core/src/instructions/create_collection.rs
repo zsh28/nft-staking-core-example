@@ -1,8 +1,5 @@
 use anchor_lang::prelude::*;
-use mpl_core::{
-    ID as MPL_CORE_ID,
-    instructions::CreateCollectionV2CpiBuilder,
-};
+use mpl_core::{instructions::CreateCollectionV2CpiBuilder, ID as MPL_CORE_ID};
 
 #[derive(Accounts)]
 pub struct CreateCollection<'info> {
@@ -22,8 +19,12 @@ pub struct CreateCollection<'info> {
     pub mpl_core_program: UncheckedAccount<'info>,
 }
 impl<'info> CreateCollection<'info> {
-    pub fn create_collection(&mut self, name: String, uri: String, bumps: &CreateCollectionBumps) -> Result<()> {
-
+    pub fn create_collection(
+        &mut self,
+        name: String,
+        uri: String,
+        bumps: &CreateCollectionBumps,
+    ) -> Result<()> {
         // Signer seeds for the update authority
         let collection_key = self.collection.key();
         let signer_seeds = &[

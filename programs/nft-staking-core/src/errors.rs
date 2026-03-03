@@ -16,4 +16,18 @@ pub enum StakingError {
     FreezePeriodNotElapsed,
     #[msg("Overflow")]
     Overflow,
+    #[msg("No rewards available to claim")]
+    NoRewardsToClaim,
+    #[msg("Missing staking attribute")]
+    MissingStakeAttribute,
+    #[msg("Oracle transfer state is stale")]
+    OracleStateStale,
+    #[msg("Invalid oracle account")]
+    InvalidOracleAccount,
+    #[msg("Invalid new owner")]
+    InvalidNewOwner,
+    #[msg("Insufficient oracle vault balance")]
+    InsufficientOracleVaultBalance,
+    #[msg("Numerical underflow")]
+    Underflow,
 }
