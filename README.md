@@ -1,105 +1,153 @@
 # NFT Staking Core
 
-This program implements an NFT staking contract built with Anchor, leveraging the Metaplex Core plugins `Attribute` and `FreezeDelegate`. This example showcases how to manage staking data directly on the asset, without storing it in PDAs.
+`nft-staking-core` is an Anchor program that lets users stake Metaplex Core NFTs and earn SPL token rewards, while keeping assets non-custodial.
 
----
+It uses Metaplex Core plugins to store staking state directly on assets and collections, enforce transfer restrictions, and gate transfers through an Oracle-based schedule.
 
-## How it works
+## What the program does
 
-The program allows users to stake their Core NFTs in a non-custodial way and for a configurable minimum period. When unstaking, rewards are calculated based on how long the NFT was staked and minted to the user's token account.
+- Creates and manages a program-controlled Metaplex Core collection.
+- Mints Core NFTs into that collection.
+- Stakes NFTs by freezing them and marking staking attributes on-chain.
+- Lets users claim rewards while still staked.
+- Lets users unstake after a configured freeze period.
+- Lets users burn staked NFTs for pending rewards plus a one-time bonus.
+- Tracks collection-level `total_staked` as a collection attribute.
+- Adds an external Oracle adapter that can approve/reject transfers based on UTC time window.
+- Includes a permissionless crank that updates Oracle transfer state and can reward the caller near boundaries.
 
-The staking state is stored directly on the NFT using the **Attribute Plugin**, and the NFT is locked using the **FreezeDelegate Plugin**.
+## Plugin usage
 
----
+The program relies on these Metaplex Core plugins:
 
-## Plugins
+- `Attributes` (asset): stores `staked`, `staked_at`, and `last_claimed_at`.
+- `FreezeDelegate` (asset): freezes NFT while staked, thaws on unstake.
+- `BurnDelegate` (asset): allows delegated burn flow for staked burn-to-earn.
+- `Attributes` (collection): stores and updates `total_staked`.
+- External Oracle Adapter (collection): validates `Transfer` lifecycle with reject support.
 
-### FreezeDelegate Plugin
+## Program accounts and state
 
-The **FreezeDelegate Plugin** is an **owner-managed plugin** that allows a delegate to freeze and thaw an asset. While frozen, the asset cannot be transferred. Freezing is as simple as toggling a boolean in the plugin data.
+### `Config`
 
-When staking, the plugin is added (or updated if it already exists from a previous stake cycle) and the asset is frozen. On unstake, the asset is unfreezed.
-
-### Attribute Plugin
-
-The **Attribute Plugin** is an **authority-managed plugin** that stores key-value pairs directly on the asset, on-chain. This allows programs to read and write traits without touching off-chain metadata.
-
-This program uses two attributes on each NFT:
-- `staked` — `"true"` when the NFT is currently staked, `"false"` otherwise
-- `staked_at` — the Unix timestamp when the NFT was staked (reset to `"0"` on unstake)
-
----
-
-## Program State
-
-The `Config` account is a PDA scoped to each collection and holds the staking configuration:
+PDA scoped per collection.
 
 ```rust
 #[account]
 pub struct Config {
-    pub points_per_stake: u32,  // reward tokens earned per day
-    pub freeze_period: u8,      // minimum days before unstaking is allowed
+    pub points_per_stake: u32,
+    pub freeze_period: u8,
     pub rewards_bump: u8,
     pub config_bump: u8,
 }
 ```
 
-The `Config` account also acts as the mint authority for the rewards token, which is a separate SPL token mint derived as a PDA from the config.
+`Config` is also mint authority for the rewards mint PDA.
 
----
+### `OracleState`
+
+PDA scoped per collection. Stores:
+
+- transfer validation bytes used by Oracle adapter
+- UTC open/close hour
+- crank reward boundary window
+- crank reward lamports
+
+### `OracleVault`
+
+PDA scoped per collection. Holds lamports used to pay boundary crank rewards.
 
 ## Instructions
 
-### `create_collection`
+- `create_collection(name, uri)`
 
-Creates a new Metaplex Core collection. The update authority is a PDA derived from the collection key, so the program is the sole authority over NFTs in the collection.
+  - Creates Core collection with program-derived update authority.
 
-### `mint_nft`
+- `mint_nft(name, uri)`
 
-Mints a new Core NFT into the collection. The update authority is the collection, ensuring the program can manage plugins.
+  - Mints Core NFT into the collection.
 
-### `initialize_config`
+- `initialize_config(points_per_stake, freeze_period)`
 
-Sets up the staking configuration for a collection. Initializes the `Config` account and the rewards token mint. Only needs to be called once per collection.
+  - Initializes staking config PDA and rewards mint PDA.
 
-### `stake`
+- `stake()`
 
-Stakes an NFT from the collection.
+  - Verifies ownership/collection authority.
+  - Sets `staked=true`, `staked_at=now`, `last_claimed_at=now`.
+  - Freezes NFT via `FreezeDelegate` plugin.
+  - Ensures burn delegate plugin exists.
+  - Increments collection `total_staked`.
 
-- Verifies the user is the owner of the NFT and that the NFT belongs to the collection
-- Adds (or updates) the Attribute Plugin with `staked = true` and `staked_at = <current timestamp>`
-- Adds the FreezeDelegate Plugin if this is the first time staking; otherwise updates the existing one
+- `claim_rewards()`
 
-### `unstake`
+  - Keeps NFT staked.
+  - Mints rewards for full days since `last_claimed_at`.
+  - Updates only `last_claimed_at`.
 
-Unstakes the NFT and mints rewards to the user.
+- `unstake()`
 
-- Validates the NFT is currently staked
-- Checks that the minimum freeze period has elapsed
-- Calculates the number of full days staked and mints `days * points_per_stake` reward tokens to the user's ATA
-- Resets the staking attributes (`staked = false`, `staked_at = 0`)
-- Thaws the asset (FreezeDelegate plugin stays on the asset with `false` state)
+  - Requires freeze period elapsed since `staked_at`.
+  - Mints full-day rewards.
+  - Sets `staked=false`, resets stake timestamps.
+  - Thaws NFT.
+  - Decrements collection `total_staked`.
 
----
+- `burn_staked_nft()`
 
-## Architecture walkthrough
+  - Computes pending rewards plus one-time burn bonus.
+  - Mints reward tokens.
+  - Burns NFT with Metaplex Core burn CPI.
+  - Decrements collection `total_staked`.
 
-### Account constraints
+- `initialize_oracle(open_hour_utc, close_hour_utc, boundary_window_seconds, crank_reward_lamports, initial_vault_lamports)`
 
-The `Stake` and `Unstake` contexts both verify:
-- The NFT's `owner` matches the signer
-- The NFT's `update_authority` is the collection
-- The collection's `update_authority` is the program's PDA
+  - Initializes Oracle state/vault PDAs.
+  - Attaches Oracle external plugin adapter to collection for Transfer lifecycle checks.
 
-### PDA structure
+- `crank_oracle()`
 
-| Account | Seeds |
-|---|---|
-| Update Authority | `["update_authority", collection]` |
-| Config | `["config", collection]` |
-| Rewards Mint | `["rewards", config]` |
+  - Permissionless.
+  - Reads current on-chain time and updates transfer state:
+    - approved inside window
+    - rejected outside window
+  - Pays caller from Oracle vault near open/close boundary.
 
----
+- `transfer_nft()`
+  - Program path for transfer CPI.
+  - Passes Oracle account as remaining account so transfer is validated by Oracle adapter.
+
+## PDA map
+
+| Account          | Seeds                              |
+| ---------------- | ---------------------------------- |
+| Update authority | `["update_authority", collection]` |
+| Config           | `["config", collection]`           |
+| Rewards mint     | `["rewards", config]`              |
+| Oracle state     | `["oracle_state", collection]`     |
+| Oracle vault     | `["oracle_vault", collection]`     |
+
+## Test setup
+
+Current tests are in `tests/nft-staking-core.ts` and cover:
+
+- collection/config/oracle initialization
+- stake + claim without unstake
+- oracle-gated transfer behavior
+- unstake and burn reward paths
+
+### Run
+
+```bash
+yarn install
+anchor build
+anchor test --skip-local-validator
+```
+
+Notes:
+
+- Tests use `surfnet_timeTravel`, so they require Surfnet-compatible RPC.
+- If Surfnet or MPL Core runtime support is missing, tests will be skipped/pending.
 
 ## Dependencies
 
